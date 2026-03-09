@@ -6,8 +6,8 @@
     <title>Умная колонка "Гоша"</title>
     <style>
         body { background-color: #121212; color: #ffffff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        #status { font-size: 24px; margin-bottom: 20px; color: #4CAF50; }
-        #log { width: 90%; height: 200px; background: #1e1e1e; padding: 10px; overflow-y: auto; font-size: 14px; border-radius: 8px; }
+        #status { font-size: 24px; margin-bottom: 20px; color: #4CAF50; font-weight: bold; text-align: center; }
+        #log { width: 90%; height: 250px; background: #1e1e1e; padding: 15px; overflow-y: auto; font-size: 15px; border-radius: 8px; line-height: 1.4; box-sizing: border-box; }
         button { padding: 15px 30px; font-size: 18px; background-color: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer; margin-bottom: 20px; }
     </style>
 </head>
@@ -18,57 +18,69 @@
     <div id="log"></div>
 
     <script>
-        // ВСТАВЬТЕ СЮДА ВАШУ ССЫЛКУ ИЗ CLOUDFLARE WORKER
+        // --- ВСТАВЬТЕ СЮДА ВАШУ ССЫЛКУ ИЗ DENO DEPLOY ---
         const WORKER_URL = "https://weak-alpaca-53.slavegex.deno.net";
         
         const statusDiv = document.getElementById('status');
         const logDiv = document.getElementById('log');
-        let isSpeaking = false; // Флаг, чтобы колонка не слушала саму себя
+        
+        let isSpeaking = false; 
+        let isFollowUpWindow = false; // Флаг открытого диалога
+        let followUpTimeout = null;   // Таймер
 
-        // Инициализация распознавания речи
+        // 1. ИСТОРИЯ ДИАЛОГА (Память)
+        // Изначально задаем Гоше правила поведения (системный промпт)
+        let conversationHistory = [
+            { "role": "user", "parts": [{ "text": "Тебя зовут Гоша. Ты умный голосовой помощник. Отвечай кратко, не более 1-3 предложений. Общайся естественно и вежливо." }] },
+            { "role": "model", "parts": [{ "text": "Привет! Я Гоша. Буду отвечать кратко и по делу." }] }
+        ];
+
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
         recognition.lang = 'ru-RU';
-        recognition.continuous = true; // Слушать постоянно
-        recognition.interimResults = false; // Ждать только полные фразы (тишину)
+        recognition.continuous = true;
+        recognition.interimResults = false;
 
         function addLog(text) {
-            logDiv.innerHTML += `<div>${text}</div>`;
+            logDiv.innerHTML += `<div style="margin-bottom: 8px;">${text}</div>`;
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
-        // Кнопка нужна, так как браузеры блокируют микрофон и звук без действия пользователя
         document.getElementById('startButton').addEventListener('click', () => {
             recognition.start();
             document.getElementById('startButton').style.display = 'none';
-            statusDiv.innerText = "Слушаю...";
-            addLog("Система запущена. Скажите 'Гоша [ваш вопрос]'");
+            statusDiv.innerText = "Слушаю (Скажите 'Гоша')...";
+            addLog("<i>Система запущена. Скажите 'Гоша [вопрос]'</i>");
         });
 
-        // Обработка распознанного текста
+        // 2. УМНОЕ РАСПОЗНАВАНИЕ ТЕКСТА
         recognition.onresult = async (event) => {
             const last = event.results.length - 1;
             const text = event.results[last][0].transcript.toLowerCase().trim();
-            addLog(`<i>Вы: ${text}</i>`);
+            let command = "";
 
-            // Ищем триггер-слово
-            if (text.includes("гоша")) {
-                const command = text.substring(text.indexOf("гоша") + 4).trim();
+            if (isFollowUpWindow) {
+                // Если мы в режиме активного диалога, берем всю фразу без "Гоша"
+                command = text;
+                clearTimeout(followUpTimeout); // Останавливаем таймер засыпания
+                isFollowUpWindow = false;
+            } else if (text.includes("гоша")) {
+                // Иначе ищем триггер-слово
+                command = text.substring(text.indexOf("гоша") + 4).trim();
+            }
+
+            if (command.length > 0) {
+                addLog(`<span style="color:#BB86FC">Вы:</span> ${command}`);
+                statusDiv.innerText = "Думаю...";
+                statusDiv.style.color = "#FFC107";
                 
-                if (command.length > 0) {
-                    statusDiv.innerText = "Думаю...";
-                    statusDiv.style.color = "#FFC107";
-                    
-                    // Ставим на паузу микрофон, чтобы не записать ответ нейросети
-                    isSpeaking = true;
-                    recognition.stop();
-                    
-                    await askGemini(command);
-                }
+                isSpeaking = true;
+                recognition.stop(); // Глушим уши
+                
+                await askGemini(command);
             }
         };
 
-        // Если микрофон отвалился (браузер уснул), перезапускаем его
         recognition.onend = () => {
             if (!isSpeaking) {
                 recognition.start();
@@ -78,57 +90,70 @@
         // Запрос к нейросети
         async function askGemini(question) {
             try {
+                // Добавляем вопрос пользователя в историю
+                conversationHistory.push({ "role": "user", "parts": [{ "text": question }] });
+
+                // Чтобы не выйти за лимиты токенов, храним только последние 12 сообщений (6 пар) + системный промпт
+                if (conversationHistory.length > 14) {
+                    conversationHistory.splice(2, 2); 
+                }
+
                 const response = await fetch(WORKER_URL, {
                     method: "POST",
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{
-                                text: "Ты голосовой помощник Гоша. Отвечай очень кратко, не более 2-3 предложений. Запрос пользователя: " + question
-                            }]
-                        }]
-                    })
+                    body: JSON.stringify({ contents: conversationHistory }) // Отправляем ВСЮ историю
                 });
 
                 const data = await response.json();
                 
-                // ДОБАВЛЕНА ПРОВЕРКА НА ОШИБКУ ОТ GOOGLE
-                if (data.error) {
-                    throw new Error(`Ошибка от Google: ${data.error.message} (Код: ${data.error.code})`);
-                }
-
-                if (!data.candidates || data.candidates.length === 0) {
-                    throw new Error("Пустой ответ от нейросети");
-                }
+                if (data.error) throw new Error(`${data.error.message}`);
+                if (!data.candidates) throw new Error("Пустой ответ");
 
                 const aiText = data.candidates[0].content.parts[0].text;
+                
+                // Сохраняем ответ Гоши в историю
+                conversationHistory.push({ "role": "model", "parts": [{ "text": aiText }] });
+                
                 addLog(`<b>Гоша:</b> ${aiText}`);
                 speakText(aiText);
 
             } catch (err) {
                 console.error(err);
                 addLog(`<b style="color:red">Ошибка:</b> ${err.message}`);
-                speakText("Произошла ошибка соединения с сервером.");
+                speakText("Произошла ошибка.");
             }
         }
 
-
-
-        // Озвучка ответа
+        // 3. НАСТРОЙКА ГОЛОСА И ПРОДОЛЖЕНИЯ ДИАЛОГА
         function speakText(text) {
             statusDiv.innerText = "Говорю...";
             statusDiv.style.color = "#2196F3";
             
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'ru-RU';
-            // Можно поиграться со скоростью и тоном
-            utterance.rate = 1.1; 
             
+            // Настройки для более мужского голоса:
+            utterance.rate = 1.05; // Чуть быстрее обычного
+            utterance.pitch = 0.8; // Понижаем тональность (бас)
+            // Пытаемся принудительно выбрать русский голос, если в системе их несколько
+            const voices = window.speechSynthesis.getVoices();
+            const ruVoice = voices.find(v => v.lang === 'ru-RU' || v.name.includes('Russian'));
+            if(ruVoice) utterance.voice = ruVoice;
+
             utterance.onend = () => {
-                // Как только Гоша договорил, включаем уши обратно
                 isSpeaking = false;
-                statusDiv.innerText = "Слушаю...";
-                statusDiv.style.color = "#4CAF50";
+                
+                // Включаем режим продолжения диалога на 10 секунд
+                isFollowUpWindow = true;
+                statusDiv.innerText = "Жду ответ... (10 сек)";
+                statusDiv.style.color = "#FF9800";
                 recognition.start();
+
+                // Таймер: если 10 секунд тишина, Гоша "засыпает"
+                followUpTimeout = setTimeout(() => {
+                    isFollowUpWindow = false;
+                    statusDiv.innerText = "Слушаю (Скажите 'Гоша')...";
+                    statusDiv.style.color = "#4CAF50";
+                }, 10000); 
             };
             
             window.speechSynthesis.speak(utterance);
@@ -136,4 +161,3 @@
     </script>
 </body>
 </html>
-
