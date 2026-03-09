@@ -134,7 +134,7 @@
             const voice = 'ru-RU-DmitryNeural'; 
             
             // Формируем URL для скачивания аудиофайла
-            const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodeURIComponent(text)}`;
+            const url = "https://weak-alpaca-53.slavegex.deno.net" + "/tts?text=" + encodeURIComponent(text);
 
             // Создаем аудио-плеер
             const audio = new Audio(url);
@@ -172,4 +172,5 @@
     </script>
 </body>
 </html>
+
 
