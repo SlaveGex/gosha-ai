@@ -123,23 +123,28 @@
             }
         }
 
-        // 3. НАСТРОЙКА ГОЛОСА И ПРОДОЛЖЕНИЯ ДИАЛОГА
+        // 3. ОБЛАЧНАЯ ОЗВУЧКА (Text-to-Speech)
         function speakText(text) {
-            statusDiv.innerText = "Говорю...";
+            statusDiv.innerText = "Генерирую голос...";
             statusDiv.style.color = "#2196F3";
             
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'ru-RU';
+            // Используем бесплатный Edge TTS API. 
+            // Голос 'ru-RU-DmitryNeural' - отличный мужской голос, звучит как диктор.
+            // Если захотите женский, поменяйте на 'ru-RU-SvetlanaNeural'
+            const voice = 'ru-RU-DmitryNeural'; 
             
-            // Настройки для более мужского голоса:
-            utterance.rate = 1.05; // Чуть быстрее обычного
-            utterance.pitch = 0.8; // Понижаем тональность (бас)
-            // Пытаемся принудительно выбрать русский голос, если в системе их несколько
-            const voices = window.speechSynthesis.getVoices();
-            const ruVoice = voices.find(v => v.lang === 'ru-RU' || v.name.includes('Russian'));
-            if(ruVoice) utterance.voice = ruVoice;
+            // Формируем URL для скачивания аудиофайла
+            const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodeURIComponent(text)}`;
 
-            utterance.onend = () => {
+            // Создаем аудио-плеер
+            const audio = new Audio(url);
+            
+            audio.oncanplay = () => {
+                statusDiv.innerText = "Говорю...";
+                audio.play();
+            };
+
+            audio.onended = () => {
                 isSpeaking = false;
                 
                 // Включаем режим продолжения диалога на 10 секунд
@@ -148,16 +153,23 @@
                 statusDiv.style.color = "#FF9800";
                 recognition.start();
 
-                // Таймер: если 10 секунд тишина, Гоша "засыпает"
                 followUpTimeout = setTimeout(() => {
                     isFollowUpWindow = false;
                     statusDiv.innerText = "Слушаю (Скажите 'Гоша')...";
                     statusDiv.style.color = "#4CAF50";
                 }, 10000); 
             };
-            
-            window.speechSynthesis.speak(utterance);
+
+            audio.onerror = () => {
+                addLog(`<b style="color:red">Ошибка:</b> Не удалось загрузить голос.`);
+                // Резервный план: если API упадет, читаем системным голосом робота
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ru-RU';
+                utterance.onend = audio.onended;
+                window.speechSynthesis.speak(utterance);
+            };
         }
     </script>
 </body>
 </html>
+
