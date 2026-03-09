@@ -83,7 +83,6 @@
                     body: JSON.stringify({
                         contents: [{
                             parts: [{
-                                // Просим отвечать кратко, чтобы телефон не читал лекцию на 5 минут
                                 text: "Ты голосовой помощник Гоша. Отвечай очень кратко, не более 2-3 предложений. Запрос пользователя: " + question
                             }]
                         }]
@@ -91,15 +90,28 @@
                 });
 
                 const data = await response.json();
+                
+                // ДОБАВЛЕНА ПРОВЕРКА НА ОШИБКУ ОТ GOOGLE
+                if (data.error) {
+                    throw new Error(`Ошибка от Google: ${data.error.message} (Код: ${data.error.code})`);
+                }
+
+                if (!data.candidates || data.candidates.length === 0) {
+                    throw new Error("Пустой ответ от нейросети");
+                }
+
                 const aiText = data.candidates[0].content.parts[0].text;
                 addLog(`<b>Гоша:</b> ${aiText}`);
                 speakText(aiText);
 
             } catch (err) {
+                console.error(err);
                 addLog(`<b style="color:red">Ошибка:</b> ${err.message}`);
-                speakText("Произошла ошибка соединения.");
+                speakText("Произошла ошибка соединения с сервером.");
             }
         }
+
+
 
         // Озвучка ответа
         function speakText(text) {
